@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Part_2_CreateUser.Models;
 using Part_2_CreateUser.Models.Authentication.SignUp;
+using User.Management.Service.Models;
+using User.Management.Service.Services;
 
 namespace Part_2_CreateUser.Controllers
 {
@@ -12,15 +14,15 @@ namespace Part_2_CreateUser.Controllers
     {
         private readonly UserManager<IdentityUser> _userManager;
         private readonly RoleManager<IdentityRole> _roleManager;
-        private readonly IConfiguration _configuration;
+        private readonly IServiceEmail _emailService;
 
         public AuthenticationController(UserManager<IdentityUser> userManager,
                                         RoleManager<IdentityRole> roleManager,
-                                        IConfiguration configuration)
+                                        IServiceEmail emailService )
         {
             _userManager = userManager;
             _roleManager = roleManager;
-            _configuration = configuration;
+            _emailService = emailService;
         }
 
         [HttpPost]
@@ -43,13 +45,57 @@ namespace Part_2_CreateUser.Controllers
                 UserName = registerUser.UserName,
             };
 
-            var result = await _userManager.CreateAsync(user, registerUser.Password);
-            return result.Succeeded
-                ? StatusCode(StatusCodes.Status201Created,
-                new Response { Status = "Success", Message = "User created successfully !" })
-                : StatusCode(StatusCodes.Status500InternalServerError,
-                new Response { Status = "Error", Message = "User failed to create !" });
+            
+            if ( await _roleManager.RoleExistsAsync(role)) // check the role exist or not
+            {
+                var result = await _userManager.CreateAsync(user, registerUser.Password);
+                if (!result.Succeeded)
+                {
+                    return StatusCode(StatusCodes.Status500InternalServerError,
+                    new Response { Status = "Error", Message = "User failed to create !" });
+                }
+                // Add role to the user
+                 await _userManager.AddToRoleAsync(user, role);
 
+                // Add tokne to verifiy the email
+                var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
+                var confirmationLink = Url.Action(nameof(ConfirmEmail), "Authentication", new {token, email = user.Email}, Request.Scheme);
+                var message = new Message(new string[] { user.Email! }, "Confirmation email link", confirmationLink);
+                _emailService.SendEmail(message);
+
+
+                return StatusCode(StatusCodes.Status200OK,
+                        new Response { Status = "Success", Message = $"Usre Created email sent to {user.Email} successfully" });
+                    
+            }
+            else
+            {
+                return StatusCode(StatusCodes.Status500InternalServerError,
+                    new Response { Status = "Error", Message = "this Role Doesnot exists" });
+            }
+
+           
+
+
+
+        }
+
+
+        [HttpGet("ConfirmEmail")]
+        public async Task<IActionResult> ConfirmEmail(string token, string email)
+        {
+            var user = await _userManager.FindByIdAsync(email);
+            if (user != null)
+            {
+                var result = await _userManager.ConfirmEmailAsync(user, token);
+                if (result.Succeeded)
+                {
+                    return StatusCode(StatusCodes.Status200OK,
+                                    new Response { Status = "success", Message = "Email varified     successfylly !" });
+                }
+            }
+            return StatusCode(StatusCodes.Status500InternalServerError,
+                    new Response { Status = "Error", Message = "This user doesnot exist" });
         }
     }
 }
